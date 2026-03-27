@@ -266,7 +266,21 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
           <img id="img-preview" class="preview-img" alt="Leaf preview">
         </div>
         <div id="img-status" style="font-size:11px;color:var(--text3);margin-top:8px;display:none;"></div>
-
+         
+        <div class="card span2">
+  <div class="card-title">📡 Live Drone Intelligence Feed</div>
+  <div style="position:relative; width:100%; border-radius:10px; overflow:hidden; background:#000;">
+    <img src="/video_feed" style="width:100%; height:auto; display:block;" alt="Connecting to Drone...">
+    
+    <div style="position:absolute; top:12px; left:12px; display:flex; gap:8px;">
+      <span class="badge bg">Live Stream</span>
+      <span class="badge bb" id="stream-fps">YOLOv8 Active</span>
+    </div>
+  </div>
+  <p style="font-size:12px; color:var(--text2); margin-top:10px;">
+    Real-time inference active. Use 'Save Report' below to archive detected anomalies.
+  </p>
+</div>
         <!-- PlantVillage-style classifier result -->
         <div id="img-classifier" style="display:none;margin-top:10px;background:var(--bg3);border-radius:8px;padding:11px 13px;">
           <div style="font-size:11px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Image Pre-analysis</div>
@@ -546,8 +560,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
 </main>
 </div>
 
+<script src="config.js"></script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
 <script>
+// ══════════════════════════════════════════════════
+//  STORAGE — persistent key-value via window.storage
+// ... (the rest of your existing code)
 // ══════════════════════════════════════════════════
 //  STORAGE — persistent key-value via window.storage
 // ══════════════════════════════════════════════════
@@ -743,12 +763,11 @@ async function runAnalysis() {
   const formData = new FormData();
   formData.append('image', fileInput.files[0]);
 
-  try {
-    const resp = await fetch('/predict', { 
+ try {
+    const resp = await fetch(`${API_BASE_URL}/api/predict`, { 
       method: 'POST',
       body: formData
     });
-
     if (!resp.ok) throw new Error('Analysis failed');
     
     const data = await resp.json();

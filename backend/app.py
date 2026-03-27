@@ -1,18 +1,19 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from ultralytics import YOLO
 import cv2
 import numpy as np
 import os
 
-app = Flask(__name__, static_folder='../frontend') # Points to your frontend folder
-CORS(app)
+app = Flask(__name__)
 
-# 1. Load Model with environment-safe pathing
+# IMPORTANT: CORS allows your Vercel/Netlify frontend to talk to this Render backend.
+# For production, replace "*" with your actual frontend URL (e.g., "https://cropguard.vercel.app")
+CORS(app, resources={r"/*": {"origins": "*"}})
+
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'best.pt')
 model = YOLO(MODEL_PATH)
 
-# 2. Pesticide Database
 PESTICIDE_DB = {
     "Rice Blast": {"pesticide": "Tricyclazole 75% WP", "rate": "0.6 g/L", "instructions": "Spray at 10-12 day intervals."},
     "Brown Spot": {"pesticide": "Mancozeb 75% WP", "rate": "2.0 g/L", "instructions": "Seed treatment recommended."},
@@ -20,20 +21,17 @@ PESTICIDE_DB = {
     "Healthy": {"pesticide": "None", "rate": "N/A", "instructions": "Maintain monitoring."}
 }
 
-# Serve Frontend - This allows you to deploy ONE service
-@app.route('/')
-def index():
-    return send_from_directory(app.static_folder, 'index.html')
+# 1. API Health Check Route
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({"status": "online", "model": "YOLOv8 Active"}), 200
 
-@app.route('/<path:path>')
-def static_proxy(path):
-    return send_from_directory(app.static_folder, path)
-
-@app.route('/predict', methods=['POST'])
+# 2. Prediction Endpoint
+@app.route('/api/predict', methods=['POST'])
 def predict():
     try:
         if 'image' not in request.files:
-            return jsonify({"error": "No image"}), 400
+            return jsonify({"error": "No image provided"}), 400
         
         file = request.files['image'].read()
         image = cv2.imdecode(np.frombuffer(file, np.uint8), cv2.IMREAD_COLOR)
@@ -55,11 +53,11 @@ def predict():
             "pesticide": treatment["pesticide"],
             "rate": treatment["rate"],
             "instructions": treatment["instructions"]
-        })
+        }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Use environment variable for Port (required for Render/Heroku)
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
