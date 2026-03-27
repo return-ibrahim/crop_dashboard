@@ -1,0 +1,13 @@
+# Web Server
+flask
+flask-cors
+gunicorn
+
+# Machine Learning & Computer Vision
+ultralytics
+opencv-python-headless
+numpy
+
+# Deep Learning Frameworks
+torch
+torchvision
