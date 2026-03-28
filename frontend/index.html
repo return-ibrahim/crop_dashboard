@@ -758,23 +758,71 @@ const LOADING_MSGS = [
 ];
 
 async function runAnalysis() {
-  // ... (validation and loading logic) ...
+  // 1. Define ALL UI elements at the very top to prevent the "Not Defined" error
+  const btn = document.getElementById('analyze-btn');
+  const fileInput = document.getElementById('img-input'); 
+  const resultBox = document.getElementById('result-box');
+  const loading = document.getElementById('analysis-loading');
 
+  // 2. Validate input
+  if (!fileInput.files[0] && !uploadedBase64) {
+    showToast('Please upload a leaf image first', 'amber');
+    return;
+  }
+
+  // 3. UI State: Start Loading
+  btn.disabled = true;
+  loading.classList.add('active');
+  resultBox.classList.remove('visible');
+
+  // 4. Prepare Data
   const formData = new FormData();
-  formData.append('image', fileInput.files[0]);
+  if (fileInput.files[0]) {
+    formData.append('image', fileInput.files[0]);
+  }
 
- try {
+  try {
+    // 5. Fetch from your Live/Local API
     const resp = await fetch(`${API_BASE_URL}/api/predict`, { 
       method: 'POST',
       body: formData
     });
-    if (!resp.ok) throw new Error('Analysis failed');
     
+    if (!resp.ok) throw new Error('Analysis failed. Server returned an error.');
+    
+    // 6. Parse the response from Flask/Claude
     const data = await resp.json();
     
+    // 7. Map the new AI data to your Dashboard UI
+    const uiResult = {
+      disease_name: data.disease,
+      scientific_name: getScientificName(data.disease),
+      confidence: data.confidence,
+      severity: data.disease === "Healthy" ? "None" : "Moderate",
+      severity_color: data.disease === "Healthy" ? "green" : "red",
+      description: `Analysis complete. AI-generated treatment plan available below.`,
+      treatments: [
+        `🧪 Recommended Chemical: ${data.pesticide}`,
+        `💧 Application Rate: ${data.rate}`,
+        `📋 Instructions: ${data.instructions}`
+      ]
+    };
+
+    // 8. Push to the screen and save to history
+    displayResult(uiResult, {
+      field: document.getElementById('field-block').value || 'Main Plot',
+      crop: document.getElementById('crop-type').value
+    });
+
+    showToast('Analysis Complete', 'green');
 
   } catch (err) {
-    showToast('Analysis Error: Check connection', 'red');
+    console.error("Analysis Error:", err);
+    showToast('Analysis Error: Check your backend connection', 'red');
+  } finally {
+    // 9. Reset UI State
+    loading.classList.remove('active');
+    btn.disabled = false;
   }
 }
 
