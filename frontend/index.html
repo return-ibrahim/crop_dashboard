@@ -782,14 +782,16 @@ async function runAnalysis() {
   }
 
   try {
-    // 5. Fetch from your Live/Local API
+    // 5a. Wake up Render's free-tier server if it's sleeping
+    document.getElementById('loading-text').textContent = 'Waking up server… (first request may take ~30s)';
+    try { await fetch(`${API_BASE_URL}/`, { signal: AbortSignal.timeout(60000) }); } catch {}
+
+    // 5b. Now send the real prediction request
+    document.getElementById('loading-text').textContent = 'Running AI disease analysis…';
     const resp = await fetch(`${API_BASE_URL}/api/predict`, { 
-      method: 'POST',
-      body: formData
+      signal: AbortSignal.timeout(90000),  // 90s timeout for cold starts
     });
-    
-    if (!resp.ok) throw new Error('Analysis failed. Server returned an error.');
-    
+
     // 6. Parse the response from Flask/Claude
     const data = await resp.json();
     
