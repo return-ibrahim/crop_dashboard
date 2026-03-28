@@ -758,84 +758,128 @@ const LOADING_MSGS = [
 ];
 
 async function runAnalysis() {
-  // 1. Define ALL UI elements at the very top to prevent the "Not Defined" error
   const btn = document.getElementById('analyze-btn');
-  const fileInput = document.getElementById('img-input'); 
+  const fileInput = document.getElementById('img-input');
   const resultBox = document.getElementById('result-box');
   const loading = document.getElementById('analysis-loading');
 
-  // 2. Validate input
   if (!fileInput.files[0] && !uploadedBase64) {
     showToast('Please upload a leaf image first', 'amber');
     return;
   }
 
-  // 3. UI State: Start Loading
   btn.disabled = true;
   loading.classList.add('active');
   resultBox.classList.remove('visible');
-
-  // 4. Prepare Data
-  const formData = new FormData();
-  if (fileInput.files[0]) {
-    formData.append('image', fileInput.files[0]);
-  }
+  document.getElementById('loading-text').textContent = 'Sending image to Claude Vision…';
 
   try {
-    // 5a. Wake up Render's free-tier server if it's sleeping
-    document.getElementById('loading-text').textContent = 'Waking up server… (first request may take ~30s)';
-    try { await fetch(`${API_BASE_URL}/`, { signal: AbortSignal.timeout(60000) }); } catch {}
+    // Convert image to base64
+    let base64Image = uploadedBase64;
+    if (!base64Image && fileInput.files[0]) {
+      base64Image = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(fileInput.files[0]);
+      });
+    }
 
-    // 5b. Now send the real prediction request
-    document.getElementById('loading-text').textContent = 'Running AI disease analysis…';
-    const resp = await fetch(`${API_BASE_URL}/api/predict`, { 
-      signal: AbortSignal.timeout(90000),  // 90s timeout for cold starts
+    const crop      = document.getElementById('crop-type').value;
+    const stage     = document.getElementById('growth-stage').value || '';
+    const temp      = document.getElementById('temperature').value  || 'unknown';
+    const humidity  = document.getElementById('humidity').value     || 'unknown';
+    const rainfall  = document.getElementById('rainfall').value     || 'unknown';
+    const ph        = document.getElementById('soil-ph').value      || 'unknown';
+    const symptoms  = document.getElementById('symptoms').value     || 'none reported';
+
+    const prompt = `You are an expert agronomist specializing in ${crop} diseases.
+Analyze this leaf image and the field data below, then return ONLY a raw JSON object — no markdown, no extra text.
+
+Field data:
+- Crop: ${crop}, Growth stage: ${stage}
+- Temperature: ${temp}°C, Humidity: ${humidity}%, Rainfall (7d): ${rainfall}mm, Soil pH: ${ph}
+- Visible symptoms: ${symptoms}
+
+Return this exact JSON shape:
+{
+  "disease": "Disease Name or Healthy",
+  "confidence": 85,
+  "severity": "None|Low|Moderate|High",
+  "severity_color": "green|amber|red",
+  "scientific_name": "Latin name or N/A",
+  "description": "2-sentence plain-English summary",
+  "pesticide": "Recommended chemical",
+  "rate": "Application rate",
+  "instructions": "2 actionable sentences",
+  "alternatives": [
+    {"name": "Alt Disease 1", "confidence": 10, "reason": "Why it might be this"},
+    {"name": "Alt Disease 2", "confidence": 5,  "reason": "Why it might be this"}
+  ]
+}`;
+
+    document.getElementById('loading-text').textContent = 'Analyzing leaf morphology…';
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
+            { type: 'text',  text: prompt }
+          ]
+        }]
+      })
     });
 
-    // 6. Parse the response from Flask/Claude
-    const data = await resp.json();
-    
-    // 7. Map the new AI data to your Dashboard UI
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+    const apiData = await response.json();
+    const text = apiData.content.map(b => b.text || '').join('');
+    const clean = text.replace(/```json|```/g, '').trim();
+    const data = JSON.parse(clean);
+
     const uiResult = {
-      disease_name: data.disease,
-      scientific_name: getScientificName(data.disease),
-      confidence: data.confidence,
-      severity: data.disease === "Healthy" ? "None" : "Moderate",
-      severity_color: data.disease === "Healthy" ? "green" : "red",
-      description: `Analysis complete. AI-generated treatment plan available below.`,
+      disease_name:     data.disease,
+      scientific_name:  data.scientific_name || getScientificName(data.disease),
+      confidence:       data.confidence,
+      severity:         data.severity         || (data.disease === 'Healthy' ? 'None' : 'Moderate'),
+      severity_color:   data.severity_color   || (data.disease === 'Healthy' ? 'green' : 'red'),
+      description:      data.description,
       treatments: [
         `🧪 Recommended Chemical: ${data.pesticide}`,
         `💧 Application Rate: ${data.rate}`,
         `📋 Instructions: ${data.instructions}`
-      ]
+      ],
+      alternatives:      data.alternatives      || [],
+      risk_next_7_days:  null,
+      economic_impact:   null
     };
 
-    // 8. Push to the screen and save to history
     displayResult(uiResult, {
-      field: document.getElementById('field-block').value || 'Main Plot',
-      crop: document.getElementById('crop-type').value
+      field:    document.getElementById('field-block').value   || 'Main Plot',
+      crop,
+      stage,
+      temp,
+      humidity,
+      rainfall,
+      ph,
+      symptoms
     });
 
-    showToast('Analysis Complete', 'green');
+    showToast('✓ Analysis Complete', 'green');
 
   } catch (err) {
-    console.error("Analysis Error:", err);
-    showToast('Analysis Error: Check your backend connection', 'red');
+    console.error('Analysis Error:', err);
+    showToast('Analysis Error: ' + err.message, 'red');
   } finally {
-    // 9. Reset UI State
     loading.classList.remove('active');
     btn.disabled = false;
   }
-}
-// Add this helper function below runAnalysis
-function getScientificName(disease) {
-  const names = {
-    "Rice Blast": "Magnaporthe oryzae",
-    "Brown Spot": "Cochliobolus miyabeanus",
-    "Bacterial Blight": "Xanthomonas oryzae",
-    "Healthy": "N/A"
-  };
-  return names[disease] || "";
 }
 
 async function displayResult(r, inputs) {
