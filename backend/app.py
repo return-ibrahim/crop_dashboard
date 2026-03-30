@@ -36,95 +36,82 @@ PESTICIDE_DB = {
 
 
 # ── AI Treatment Plan ──────────────────────────────────────────────────────
-def get_ai_treatment(disease_name):
-    """Fetches a dynamic treatment plan from Gemini (free tier)."""
+def get_ai_treatment(disease_name, retries=4, base_delay=2):
+    """Fetches a dynamic treatment plan from Gemini, with retry on 429."""
+    import time
+
     if _gemini_model is None or disease_name == "Healthy":
         return PESTICIDE_DB.get(disease_name, PESTICIDE_DB["Healthy"])
 
-    try:
-        prompt = (
-            f"You are an expert agronomist. A crop has been diagnosed with {disease_name}. "
-            "Return ONLY a raw JSON object with exactly three keys: "
-            "'pesticide' (recommended chemical name), 'rate' (application rate), and "
-            "'instructions' (2 short sentences of actionable advice). "
-            "Do not include markdown formatting or any other text."
-        )
-        response = _gemini_model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                max_output_tokens=150,
-                temperature=0.2,
+    prompt = (
+        f"You are an expert agronomist. A crop has been diagnosed with {disease_name}. "
+        "Return ONLY a raw JSON object with exactly three keys: "
+        "'pesticide' (recommended chemical name), 'rate' (application rate), and "
+        "'instructions' (2 short sentences of actionable advice). "
+        "Do not include markdown formatting or any other text."
+    )
+
+    for attempt in range(retries):
+        try:
+            response = _gemini_model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    max_output_tokens=150,
+                    temperature=0.2,
+                )
             )
-        )
-        raw = response.text.strip().replace("```json", "").replace("```", "")
-        return json.loads(raw)
-    except Exception as e:
-        print(f"⚠️  Gemini treatment failed, using fallback. Error: {e}")
-        return PESTICIDE_DB.get(disease_name, PESTICIDE_DB["Healthy"])
+            raw = response.text.strip().replace("```json", "").replace("```", "")
+            return json.loads(raw)
+
+        except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                wait = base_delay * (2 ** attempt)   # 2s → 4s → 8s → 16s
+                print(f"⏳ Gemini 429 – waiting {wait}s (attempt {attempt + 1}/{retries})")
+                time.sleep(wait)
+            else:
+                print(f"⚠️  Gemini treatment failed, using fallback. Error: {e}")
+                break
+
+    # All retries exhausted → use fallback DB silently
+    return PESTICIDE_DB.get(disease_name, PESTICIDE_DB["Healthy"])
 
 
-# ── Video-stream globals ────────────────────────────────────────────────────
-_camera     = None
-_camera_lock = threading.Lock()
+import queue as _queue
 
-def get_camera():
-    """Return a shared VideoCapture, opening it lazily."""
-    global _camera
-    with _camera_lock:
-        if _camera is None or not _camera.isOpened():
-            # Try index 0 first; on cloud/Render there may be no camera,
-            # in which case we return None and the route will send a placeholder.
-            _camera = cv2.VideoCapture(0)
-        return _camera if _camera.isOpened() else None
+# ── Frame queue — receives JPEG frames pushed from drone_bridge.py ──────────
+# E88 drone streams RTSP at rtsp://192.168.1.1:7070/webcam on its local WiFi.
+# drone_bridge.py (runs on your laptop) captures that stream and pushes each
+# YOLO-annotated frame to /api/drone_frame on this Render backend.
+_frame_queue = _queue.Queue(maxsize=3)   # keep only latest 3 frames
+
+
+def _make_placeholder(msg="Waiting for E88 drone feed…"):
+    h, w = 384, 640
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    cv2.putText(frame, msg,
+                (60, h // 2 - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                (0, 200, 80), 2, cv2.LINE_AA)
+    cv2.putText(frame, "Run drone_bridge.py on your laptop",
+                (100, h // 2 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (80, 80, 80), 1, cv2.LINE_AA)
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return buf.tobytes()
 
 
 def generate_frames():
-    """MJPEG generator — overlays YOLO detections on each frame."""
-    cap = get_camera()
-
-    if cap is None:
-        # No real camera — send a single "no signal" placeholder frame
-        h, w = 480, 640
-        while True:
-            frame = np.zeros((h, w, 3), dtype=np.uint8)
-            cv2.putText(frame, "No Camera / Drone Signal",
-                        (80, h // 2 - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                        (0, 200, 80), 2, cv2.LINE_AA)
-            cv2.putText(frame, "Connect camera or drone to enable live feed",
-                        (60, h // 2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (100, 100, 100), 1, cv2.LINE_AA)
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                   + buf.tobytes() + b'\r\n')
-            # ~1 fps for the placeholder to save bandwidth
-            import time; time.sleep(1)
-        return
-
+    """MJPEG generator — serves YOLO-annotated frames from the E88 drone."""
+    import time
+    placeholder = _make_placeholder()
     while True:
-        success, frame = cap.read()
-        if not success:
-            break
-
-        # Run YOLO detection (low conf threshold for the live feed)
-        results = model.predict(frame, conf=0.4, verbose=False)[0]
-
-        for box in results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            cls_id = int(box.cls[0])
-            conf   = float(box.conf[0])
-            label  = f"{model.names[cls_id]} {conf:.0%}"
-
-            # Red boxes for diseases, green for healthy
-            color = (0, 255, 0) if model.names[cls_id].lower() == "healthy" else (0, 60, 255)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, label, (x1, max(y1 - 8, 14)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
-
-        # Encode and yield
-        _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-               + buf.tobytes() + b'\r\n')
-
+        try:
+            frame_bytes = _frame_queue.get(timeout=3)
+        except _queue.Empty:
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                   + placeholder + b"\r\n")
+            continue
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+               + frame_bytes + b"\r\n")
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 @app.route('/', methods=['GET'])
@@ -139,6 +126,28 @@ def video_feed():
         generate_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+
+
+@app.route('/api/drone_frame', methods=['POST'])
+def receive_drone_frame():
+    """
+    Receives a YOLO-annotated JPEG frame pushed from drone_bridge.py.
+    The bridge script runs on your laptop connected to the E88 WiFi hotspot,
+    reads rtsp://192.168.1.1:7070/webcam, runs YOLO locally, and POSTs
+    each processed frame as raw JPEG bytes to this endpoint.
+    """
+    frame_bytes = request.data
+    if not frame_bytes:
+        return jsonify({"error": "No frame data"}), 400
+
+    # Drop oldest frame if queue is full, then enqueue new one
+    if _frame_queue.full():
+        try:
+            _frame_queue.get_nowait()
+        except Exception:
+            pass
+    _frame_queue.put(frame_bytes)
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route('/api/predict', methods=['POST'])

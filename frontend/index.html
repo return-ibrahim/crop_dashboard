@@ -772,12 +772,20 @@ const LOADING_MSGS = [
   'Finalizing AI diagnosis…'
 ];
 
+// Debounce guard — prevents stacked requests on rapid clicks
+let _analysisInFlight = false;
+
 async function runAnalysis() {
+  if (_analysisInFlight) {
+    showToast('⏳ Analysis already running — please wait', 'amber');
+    return;
+  }
   const btn = document.getElementById('analyze-btn');
   const fileInput = document.getElementById('img-input');
   const resultBox = document.getElementById('result-box');
   const loading = document.getElementById('analysis-loading');
 
+  _analysisInFlight = true;
   btn.disabled = true;
   loading.classList.add('active');
   resultBox.classList.remove('visible');
@@ -849,10 +857,20 @@ Return this exact JSON shape:
       })
     });
 
+    // ── Handle 429 rate-limit with friendly message ──────────────────────
+    if (response.status === 429) {
+      showToast('⏳ Rate limit hit — retrying automatically… please wait', 'amber');
+      throw new Error('Rate limit exceeded (429). The server is retrying. Wait a few seconds and try again.');
+    }
     if (!response.ok) throw new Error(`API error: ${response.status}`);
 
     const apiData = await response.json();
-    if (apiData.error) throw new Error(apiData.error);
+    // Surface detailed error from proxy (e.g. rate limit message after retries)
+    if (apiData.error) {
+      const is429 = apiData.error.includes('429') || apiData.error.toLowerCase().includes('rate limit');
+      showToast(is429 ? '⏳ Rate limit — please wait ~30s and retry' : '✕ ' + apiData.error, is429 ? 'amber' : 'red');
+      throw new Error(apiData.error);
+    }
     const text = apiData.content.map(b => b.text || '').join('');
     const clean = text.replace(/```json|```/g, '').trim();
     const data = JSON.parse(clean);
@@ -889,10 +907,14 @@ Return this exact JSON shape:
 
   } catch (err) {
     console.error('Analysis Error:', err);
-    showToast('Analysis Error: ' + err.message, 'red');
+    // Don't double-toast if we already showed a 429 toast above
+    if (!err.message.includes('Rate limit') && !err.message.includes('429')) {
+      showToast('Analysis Error: ' + err.message, 'red');
+    }
   } finally {
     loading.classList.remove('active');
     btn.disabled = false;
+    _analysisInFlight = false;
   }
 }
 
