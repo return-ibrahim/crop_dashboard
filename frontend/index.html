@@ -634,51 +634,32 @@ function handleImage(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = async (ev) => {
+  reader.onload = (ev) => {
     const preview = document.getElementById('img-preview');
     preview.src = ev.target.result;
     preview.style.display = 'block';
     uploadedBase64 = ev.target.result.split(',')[1];
     document.getElementById('upload-zone').style.borderColor = 'var(--green)';
-    document.getElementById('img-status').textContent = '✓ Image loaded — will be analyzed by Claude Vision';
+
+    // Show image info without calling Gemini — saves one API call
+    const sizeKB = Math.round(file.size / 1024);
+    document.getElementById('img-status').textContent =
+      `✓ Image ready (${sizeKB} KB) — click Analyze with AI to run diagnosis`;
     document.getElementById('img-status').style.display = 'block';
     document.getElementById('img-status').style.color = 'var(--green)';
-    await preAnalyzeImage(uploadedBase64);
+
+    // Show a quick local preview label (no API call)
+    const classifierDiv = document.getElementById('img-classifier');
+    const resultDiv     = document.getElementById('classifier-result');
+    classifierDiv.style.display = 'block';
+    resultDiv.innerHTML = '<span style="color:var(--text2)">📷 Image loaded — full AI analysis will run when you click <strong>Analyze with AI</strong></span>';
   };
   reader.readAsDataURL(file);
 }
 
-async function preAnalyzeImage(b64) {
-  const classifierDiv = document.getElementById('img-classifier');
-  const resultDiv = document.getElementById('classifier-result');
-  classifierDiv.style.display = 'block';
-  resultDiv.innerHTML = '<span style="color:var(--text3)">Scanning image…</span>';
-
-  // Route through /api/analyze (Vercel serverless proxy) — avoids browser CORS
-  // and keeps the API key server-side.
-  try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 200,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-            { type: 'text', text: 'Look at this image. Is it a crop leaf? If yes, what crop and do you see any visible disease symptoms? Reply in one sentence, maximum 25 words.' }
-          ]
-        }]
-      })
-    });
-    const data = await resp.json();
-    const text = data.content?.map(b => b.text || '').join('') || 'Unable to analyze image.';
-    resultDiv.innerHTML = `<span style="color:var(--text)">${text}</span>`;
-  } catch {
-    resultDiv.innerHTML = '<span style="color:var(--text3)">Image loaded — will be analyzed with field data.</span>';
-  }
-}
+// preAnalyzeImage removed — was firing a Gemini call on every upload
+// causing 429 rate-limit errors before the user even clicked Analyze.
+// The main runAnalysis() already does a full vision + field-data diagnosis.
 
 // ══════════════════════════════════════════════════
 //  LIVE WEATHER via Open-Meteo (no API key needed)
@@ -761,7 +742,7 @@ function weatherCodeToIcon(code) {
 }
 
 // ══════════════════════════════════════════════════
-//  AI ANALYSIS — Claude with image + field data
+//  AI ANALYSIS — Gemini with image + field data
 // ══════════════════════════════════════════════════
 const LOADING_MSGS = [
   'Analyzing leaf morphology and patterns…',
@@ -789,7 +770,7 @@ async function runAnalysis() {
   btn.disabled = true;
   loading.classList.add('active');
   resultBox.classList.remove('visible');
-  document.getElementById('loading-text').textContent = 'Preparing analysis…';
+  document.getElementById('loading-text').textContent = 'Sending to Gemini AI…';
 
   try {
     // Build the user content — image is OPTIONAL
