@@ -6,4 +6,4 @@ opencv-python-headless
 numpy
 torch
 torchvision
-google-generativeai
+google-genai

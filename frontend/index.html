@@ -754,17 +754,62 @@ const LOADING_MSGS = [
 ];
 
 // Debounce guard — prevents stacked requests on rapid clicks
+// ── Debounce guard ────────────────────────────────────────────────────────
 let _analysisInFlight = false;
 
+// ── Countdown helper — shown in the loading bar during 429 waits ──────────
+function startCountdown(seconds, onDone) {
+  const loadingText = document.getElementById('loading-text');
+  let remaining = seconds;
+  loadingText.textContent = `Rate limited — retrying in ${remaining}s…`;
+  const interval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(interval);
+      onDone();
+    } else {
+      loadingText.textContent = `Rate limited — retrying in ${remaining}s…`;
+    }
+  }, 1000);
+  return interval;
+}
+
+// ── Core fetch — one Gemini call, no sleep inside ─────────────────────────
+async function callAnalyzeAPI(messageContent) {
+  const response = await fetch('/api/analyze', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model:     'gemini-2.0-flash',
+      max_tokens: 1000,
+      messages:  [{ role: 'user', content: messageContent }]
+    })
+  });
+
+  // Parse body regardless of status
+  const apiData = await response.json().catch(() => ({}));
+
+  if (response.status === 429 || apiData.error === 'rate_limit') {
+    const retryAfter = apiData.retryAfter || 15;
+    return { ok: false, rateLimited: true, retryAfter };
+  }
+  if (!response.ok) {
+    return { ok: false, rateLimited: false, error: apiData.error || `API error ${response.status}` };
+  }
+  return { ok: true, data: apiData };
+}
+
+// ── Main analysis function ────────────────────────────────────────────────
 async function runAnalysis() {
   if (_analysisInFlight) {
     showToast('⏳ Analysis already running — please wait', 'amber');
     return;
   }
-  const btn = document.getElementById('analyze-btn');
+
+  const btn       = document.getElementById('analyze-btn');
   const fileInput = document.getElementById('img-input');
   const resultBox = document.getElementById('result-box');
-  const loading = document.getElementById('analysis-loading');
+  const loading   = document.getElementById('analysis-loading');
 
   _analysisInFlight = true;
   btn.disabled = true;
@@ -773,7 +818,7 @@ async function runAnalysis() {
   document.getElementById('loading-text').textContent = 'Sending to Gemini AI…';
 
   try {
-    // Build the user content — image is OPTIONAL
+    // ── Build image payload (optional) ───────────────────────────────────
     let base64Image = uploadedBase64;
     if (!base64Image && fileInput.files[0]) {
       base64Image = await new Promise((res, rej) => {
@@ -784,13 +829,13 @@ async function runAnalysis() {
       });
     }
 
-    const crop      = document.getElementById('crop-type').value;
-    const stage     = document.getElementById('growth-stage').value || '';
-    const temp      = document.getElementById('temperature').value  || 'unknown';
-    const humidity  = document.getElementById('humidity').value     || 'unknown';
-    const rainfall  = document.getElementById('rainfall').value     || 'unknown';
-    const ph        = document.getElementById('soil-ph').value      || 'unknown';
-    const symptoms  = document.getElementById('symptoms').value     || 'none reported';
+    const crop     = document.getElementById('crop-type').value;
+    const stage    = document.getElementById('growth-stage').value || '';
+    const temp     = document.getElementById('temperature').value  || 'unknown';
+    const humidity = document.getElementById('humidity').value     || 'unknown';
+    const rainfall = document.getElementById('rainfall').value     || 'unknown';
+    const ph       = document.getElementById('soil-ph').value      || 'unknown';
+    const symptoms = document.getElementById('symptoms').value     || 'none reported';
 
     const prompt = `You are an expert agronomist specializing in ${crop} diseases.
 Analyze ${base64Image ? 'the leaf image and ' : ''}the field data below, then return ONLY a raw JSON object — no markdown, no extra text.
@@ -817,81 +862,73 @@ Return this exact JSON shape:
   ]
 }`;
 
-    document.getElementById('loading-text').textContent = base64Image
-      ? 'Analyzing leaf morphology…'
-      : 'Evaluating field conditions…';
-
-    // Build the message content — attach image only when one was uploaded
     const messageContent = [];
-    if (base64Image) {
-      messageContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } });
-    }
+    if (base64Image) messageContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } });
     messageContent.push({ type: 'text', text: prompt });
 
-    const response = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: messageContent }]
-      })
-    });
+    document.getElementById('loading-text').textContent = base64Image ? 'Analyzing leaf morphology…' : 'Evaluating field conditions…';
 
-    // ── Handle 429 rate-limit with friendly message ──────────────────────
-    if (response.status === 429) {
-      showToast('⏳ Rate limit hit — retrying automatically… please wait', 'amber');
-      throw new Error('Rate limit exceeded (429). The server is retrying. Wait a few seconds and try again.');
-    }
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    // ── Retry loop with visible countdown (runs in browser — no timeout) ──
+    const MAX_RETRIES    = 4;
+    const RETRY_DELAYS   = [15, 20, 30, 45]; // seconds between attempts
+    let result;
 
-    const apiData = await response.json();
-    // Surface detailed error from proxy (e.g. rate limit message after retries)
-    if (apiData.error) {
-      const is429 = apiData.error.includes('429') || apiData.error.toLowerCase().includes('rate limit');
-      showToast(is429 ? '⏳ Rate limit — please wait ~30s and retry' : '✕ ' + apiData.error, is429 ? 'amber' : 'red');
-      throw new Error(apiData.error);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      result = await callAnalyzeAPI(messageContent);
+
+      if (result.ok) break; // success
+
+      if (!result.rateLimited) {
+        // Hard error — don't retry
+        throw new Error(result.error || 'Unknown API error');
+      }
+
+      // 429 — show countdown, then retry
+      if (attempt < MAX_RETRIES - 1) {
+        const waitSecs = result.retryAfter > 0 ? result.retryAfter : RETRY_DELAYS[attempt];
+        showToast(`⏳ Rate limit hit — retrying in ${waitSecs}s (${attempt + 1}/${MAX_RETRIES})`, 'amber');
+
+        await new Promise(resolve => startCountdown(waitSecs, resolve));
+        document.getElementById('loading-text').textContent = `Retrying… (attempt ${attempt + 2}/${MAX_RETRIES})`;
+      }
     }
-    const text = apiData.content.map(b => b.text || '').join('');
+
+    if (!result.ok) {
+      throw new Error('Gemini rate limit exceeded after all retries. Please wait 1 minute and try again.');
+    }
+
+    // ── Parse response ────────────────────────────────────────────────────
+    const text  = result.data.content.map(b => b.text || '').join('');
     const clean = text.replace(/```json|```/g, '').trim();
-    const data = JSON.parse(clean);
+    const data  = JSON.parse(clean);
 
     const uiResult = {
-      disease_name:     data.disease,
-      scientific_name:  data.scientific_name || getScientificName(data.disease),
-      confidence:       data.confidence,
-      severity:         data.severity         || (data.disease === 'Healthy' ? 'None' : 'Moderate'),
-      severity_color:   data.severity_color   || (data.disease === 'Healthy' ? 'green' : 'red'),
-      description:      data.description,
+      disease_name:    data.disease,
+      scientific_name: data.scientific_name || getScientificName(data.disease),
+      confidence:      data.confidence,
+      severity:        data.severity      || (data.disease === 'Healthy' ? 'None'  : 'Moderate'),
+      severity_color:  data.severity_color || (data.disease === 'Healthy' ? 'green' : 'red'),
+      description:     data.description,
       treatments: [
         `🧪 Recommended Chemical: ${data.pesticide}`,
         `💧 Application Rate: ${data.rate}`,
         `📋 Instructions: ${data.instructions}`
       ],
-      alternatives:      data.alternatives      || [],
-      risk_next_7_days:  null,
-      economic_impact:   null
+      alternatives:     data.alternatives || [],
+      risk_next_7_days: null,
+      economic_impact:  null
     };
 
     displayResult(uiResult, {
-      field:    document.getElementById('field-block').value   || 'Main Plot',
-      crop,
-      stage,
-      temp,
-      humidity,
-      rainfall,
-      ph,
-      symptoms
+      field: document.getElementById('field-block').value || 'Main Plot',
+      crop, stage, temp, humidity, rainfall, ph, symptoms
     });
 
     showToast('✓ Analysis Complete', 'green');
 
   } catch (err) {
     console.error('Analysis Error:', err);
-    // Don't double-toast if we already showed a 429 toast above
-    if (!err.message.includes('Rate limit') && !err.message.includes('429')) {
-      showToast('Analysis Error: ' + err.message, 'red');
-    }
+    showToast('✕ ' + err.message, 'red');
   } finally {
     loading.classList.remove('active');
     btn.disabled = false;
