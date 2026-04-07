@@ -1146,7 +1146,6 @@ async function callAnalyzeAPI(messageContent) {
   return { ok: true, data: apiData };
 }
 
-// ── Main analysis function ────────────────────────────────────────────────
 async function runAnalysis() {
   if (_analysisInFlight) {
     showToast('⏳ Analysis already running — please wait', 'amber');
@@ -1158,24 +1157,37 @@ async function runAnalysis() {
   const resultBox = document.getElementById('result-box');
   const loading   = document.getElementById('analysis-loading');
 
+  if (!fileInput.files[0]) {
+     showToast('Please upload a leaf image for YOLOv8 visual analysis.', 'amber');
+     return;
+  }
+
   _analysisInFlight = true;
   btn.disabled = true;
   loading.classList.add('active');
   resultBox.classList.remove('visible');
-  document.getElementById('loading-text').textContent = 'Sending to Gemini AI…';
+  document.getElementById('loading-text').textContent = 'Running YOLOv8 Vision Model…';
 
   try {
-    // ── Build image payload (optional) ───────────────────────────────────
-    let base64Image = uploadedBase64;
-    if (!base64Image && fileInput.files[0]) {
-      base64Image = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(fileInput.files[0]);
-      });
+    // 1. Send image to Flask YOLO backend instead of Gemini directly
+    const formData = new FormData();
+    formData.append('image', fileInput.files[0]);
+
+    const response = await fetch(API_BASE_URL + '/api/predict', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) throw new Error('API error ' + response.status);
+    const data = await response.json();
+    if (data.error) throw new Error(data.error);
+
+    // 2. Update UI with the YOLO bounding-box image!
+    if (data.annotated_image) {
+        document.getElementById('img-preview').src = 'data:image/jpeg;base64,' + data.annotated_image;
     }
 
+    // Capture field conditions for history saving
     const crop     = document.getElementById('crop-type').value;
     const stage    = document.getElementById('growth-stage').value || '';
     const temp     = document.getElementById('temperature').value  || 'unknown';
@@ -1183,95 +1195,28 @@ async function runAnalysis() {
     const rainfall = document.getElementById('rainfall').value     || 'unknown';
     const ph       = document.getElementById('soil-ph').value      || 'unknown';
     const symptoms = document.getElementById('symptoms').value     || 'none reported';
+    const field    = document.getElementById('field-block').value  || 'Main Plot';
 
-    const prompt = `You are an expert agronomist specializing in ${crop} diseases.
-Analyze ${base64Image ? 'the leaf image and ' : ''}the field data below, then return ONLY a raw JSON object — no markdown, no extra text.
-
-Field data:
-- Crop: ${crop}, Growth stage: ${stage}
-- Temperature: ${temp}°C, Humidity: ${humidity}%, Rainfall (7d): ${rainfall}mm, Soil pH: ${ph}
-- Visible symptoms: ${symptoms}
-
-Return this exact JSON shape:
-{
-  "disease": "Disease Name or Healthy",
-  "confidence": 85,
-  "severity": "None|Low|Moderate|High",
-  "severity_color": "green|amber|red",
-  "scientific_name": "Latin name or N/A",
-  "description": "2-sentence plain-English summary",
-  "pesticide": "Recommended chemical",
-  "rate": "Application rate",
-  "instructions": "2 actionable sentences",
-  "alternatives": [
-    {"name": "Alt Disease 1", "confidence": 10, "reason": "Why it might be this"},
-    {"name": "Alt Disease 2", "confidence": 5,  "reason": "Why it might be this"}
-  ]
-}`;
-
-    const messageContent = [];
-    if (base64Image) messageContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } });
-    messageContent.push({ type: 'text', text: prompt });
-
-    document.getElementById('loading-text').textContent = base64Image ? 'Analyzing leaf morphology…' : 'Evaluating field conditions…';
-
-    // ── Retry loop with visible countdown (runs in browser — no timeout) ──
-    const MAX_RETRIES    = 4;
-    const RETRY_DELAYS   = [15, 20, 30, 45]; // seconds between attempts
-    let result;
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      result = await callAnalyzeAPI(messageContent);
-
-      if (result.ok) break; // success
-
-      if (!result.rateLimited) {
-        // Hard error — don't retry
-        throw new Error(result.error || 'Unknown API error');
-      }
-
-      // 429 — show countdown, then retry
-      if (attempt < MAX_RETRIES - 1) {
-        const waitSecs = result.retryAfter > 0 ? result.retryAfter : RETRY_DELAYS[attempt];
-        showToast(`⏳ Rate limit hit — retrying in ${waitSecs}s (${attempt + 1}/${MAX_RETRIES})`, 'amber');
-
-        await new Promise(resolve => startCountdown(waitSecs, resolve));
-        document.getElementById('loading-text').textContent = `Retrying… (attempt ${attempt + 2}/${MAX_RETRIES})`;
-      }
-    }
-
-    if (!result.ok) {
-      throw new Error('Gemini rate limit exceeded after all retries. Please wait 1 minute and try again.');
-    }
-
-    // ── Parse response ────────────────────────────────────────────────────
-    const text  = result.data.content.map(b => b.text || '').join('');
-    const clean = text.replace(/```json|```/g, '').trim();
-    const data  = JSON.parse(clean);
-
+    // 3. Format results for your existing UI structure
     const uiResult = {
       disease_name:    data.disease,
-      scientific_name: data.scientific_name || getScientificName(data.disease),
+      scientific_name: data.disease === 'Healthy' ? '' : 'Identified via YOLOv8', 
       confidence:      data.confidence,
-      severity:        data.severity      || (data.disease === 'Healthy' ? 'None'  : 'Moderate'),
-      severity_color:  data.severity_color || (data.disease === 'Healthy' ? 'green' : 'red'),
-      description:     data.description,
+      severity:        data.disease === 'Healthy' ? 'None' : (data.confidence > 75 ? 'High' : 'Moderate'),
+      severity_color:  data.disease === 'Healthy' ? 'green' : (data.confidence > 75 ? 'red' : 'amber'),
+      description:     `Computer Vision analysis detected ${data.disease} with ${data.confidence}% confidence.`,
       treatments: [
         `🧪 Recommended Chemical: ${data.pesticide}`,
         `💧 Application Rate: ${data.rate}`,
         `📋 Instructions: ${data.instructions}`
       ],
-      alternatives:     data.alternatives || [],
+      alternatives:    [],
       risk_next_7_days: null,
       economic_impact:  null
     };
 
-    displayResult(uiResult, {
-      field: document.getElementById('field-block').value || 'Main Plot',
-      crop, stage, temp, humidity, rainfall, ph, symptoms
-    });
-
-    showToast('✓ Analysis Complete', 'green');
+    displayResult(uiResult, { field, crop, stage, temp, humidity, rainfall, ph, symptoms });
+    showToast('✓ YOLOv8 Analysis Complete', 'green');
 
   } catch (err) {
     console.error('Analysis Error:', err);
@@ -1282,7 +1227,6 @@ Return this exact JSON shape:
     _analysisInFlight = false;
   }
 }
-
 async function displayResult(r, inputs) {
   const colMap = { red:'var(--red)', amber:'var(--amber)', green:'var(--green)', blue:'var(--blue)' };
   const clsMap = { red:'br', amber:'ba', green:'bg', blue:'bb' };

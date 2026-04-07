@@ -7,7 +7,7 @@ import json
 import queue as _queue
 import asyncio
 import threading
-
+import base64
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
@@ -242,17 +242,26 @@ def receive_drone_frame():
 
 @app.route("/api/predict", methods=["POST"])
 def predict():
-    """Run YOLO inference on a posted image and return disease + AI treatment."""
+    """Run YOLO inference on a posted image, draw bounding boxes, and return disease + AI treatment."""
     model = get_yolo()
     if model is None:
         return jsonify({"error": "YOLO model not loaded — upload best.pt to backend/models/best.pt"}), 503
     try:
         if "image" not in request.files:
             return jsonify({"error": "No image provided"}), 400
-        file    = request.files["image"].read()
-        image   = cv2.imdecode(np.frombuffer(file, np.uint8), cv2.IMREAD_COLOR)
+        
+        file = request.files["image"].read()
+        image = cv2.imdecode(np.frombuffer(file, np.uint8), cv2.IMREAD_COLOR)
+        
+        # 1. Run YOLO inference
         results = model.predict(image, conf=0.5)[0]
 
+        # 2. Draw Bounding Boxes (Just like the video)
+        annotated_frame = results.plot()
+        _, buffer = cv2.imencode('.jpg', annotated_frame)
+        annotated_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        # 3. Extract class name and confidence
         if len(results.boxes) == 0:
             diagnosis, conf = "Healthy", 100.0
         else:
@@ -260,17 +269,19 @@ def predict():
             diagnosis = model.names[cls_id]
             conf      = round(float(results.boxes[0].conf[0]) * 100, 2)
 
+        # 4. Get treatment from Gemini based on YOLO's diagnosis
         treatment = get_ai_treatment(diagnosis)
+        
         return jsonify({
             "disease":      diagnosis,
             "confidence":   conf,
             "pesticide":    treatment.get("pesticide",    "Consult Agronomist"),
             "rate":         treatment.get("rate",         "N/A"),
             "instructions": treatment.get("instructions", "No specific instructions available."),
+            "annotated_image": annotated_b64  # NEW: Sending the bounding-box image back
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
