@@ -282,6 +282,29 @@ def predict():
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+
+import time
+
+@app.route("/video_feed")
+def video_feed():
+    """MJPEG stream over standard HTTP (bypasses Render's UDP restrictions)"""
+    def generate():
+        while True:
+            if not _frame_queue.empty():
+                # Grab the latest frame from the drone bridge
+                frame_bytes = _frame_queue.get()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            else:
+                # If no drone is connected yet, yield the placeholder
+                placeholder = _make_placeholder_frame()
+                _, buf = cv2.imencode('.jpg', placeholder)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+                time.sleep(0.1) # Prevent CPU spinning
+                
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

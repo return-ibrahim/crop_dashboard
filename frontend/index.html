@@ -224,7 +224,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
 <div class="page active" id="page-predict">
   <div class="page-header">
     <h1>Predict Disease</h1>
-    <p>AI-powered diagnosis using leaf imaging, live weather and soil data.</p>
+    <p>AI-powered diagnosis using leaf imaging, live weather</p>
   </div>
 
   <!-- Live stats -->
@@ -280,9 +280,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
 
   <!-- Video element — WebRTC stream renders here -->
   <div style="position:relative;width:100%;border-radius:10px;overflow:hidden;background:#000;min-height:220px;">
-    <video id="drone-video" autoplay playsinline muted
-      style="width:100%;height:auto;display:block;min-height:220px;object-fit:cover;"></video>
-
+    <img id="drone-video" crossorigin="anonymous" style="width:100%;height:auto;display:block;min-height:220px;object-fit:cover;">
     <!-- Overlay badges -->
     <div style="position:absolute;top:10px;left:10px;display:flex;gap:6px;" id="video-overlay-badges">
       <span class="badge bb" id="webrtc-quality-badge" style="display:none;font-size:10px;"></span>
@@ -637,110 +635,39 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
 // ─────────────────────────────────────────────────────────────────
 //  WebRTC — connects to the aiortc backend and streams drone video
 // ─────────────────────────────────────────────────────────────────
-let _pc = null;                   // RTCPeerConnection
 let _liveDetectTimer = null;      // setInterval handle
 let _liveHistory = [];            // last 5 detections
-let _statsTimer  = null;          // requestAnimationFrame handle for quality badge
 
-async function connectWebRTC() {
-  if (_pc) disconnectWebRTC();
-
-  const btn      = document.getElementById('webrtc-connect-btn');
-  const discBtn  = document.getElementById('webrtc-disconnect-btn');
-  const statusB  = document.getElementById('webrtc-status-badge');
-  const errorB   = document.getElementById('webrtc-error-badge');
+function connectWebRTC() {
+  const video      = document.getElementById('drone-video');
+  const btn        = document.getElementById('webrtc-connect-btn');
+  const discBtn    = document.getElementById('webrtc-disconnect-btn');
+  const statusB    = document.getElementById('webrtc-status-badge');
   const placeholder = document.getElementById('drone-placeholder');
 
-  btn.disabled = true;
-  btn.textContent = 'Connecting…';
-  errorB.style.display = 'none';
+  // Hide placeholder, show stream
+  placeholder.style.display = 'none';
+  btn.style.display = 'none';
+  discBtn.style.display = 'inline-flex';
+  statusB.style.display = 'inline-flex';
+  statusB.textContent = '● Live HTTP Stream';
 
-  try {
-    _pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ]
-    });
-
-    // ── When the remote video track arrives, attach it to <video> ──
-    _pc.ontrack = (event) => {
-      const video = document.getElementById('drone-video');
-      video.srcObject = event.streams[0];
-      placeholder.style.display = 'none';
-      statusB.style.display = 'inline-flex';
-      startLiveDetection();
-      startQualityMonitor();
-    };
-
-    _pc.onconnectionstatechange = () => {
-      const state = _pc.connectionState;
-      console.log('WebRTC state:', state);
-      if (state === 'failed' || state === 'disconnected') {
-        showToast('⚠ Drone stream disconnected', 'amber');
-        stopLiveDetection();
-        statusB.style.display = 'none';
-        errorB.style.display  = 'inline-flex';
-        placeholder.style.display = 'flex';
-      }
-    };
-
-    // ── Create recvonly offer ──
-    _pc.addTransceiver('video', { direction: 'recvonly' });
-    const offer = await _pc.createOffer();
-    await _pc.setLocalDescription(offer);
-
-    // Wait for ICE gathering to complete (avoids trickle-ICE complexity)
-    await new Promise((resolve) => {
-      if (_pc.iceGatheringState === 'complete') { resolve(); return; }
-      _pc.onicegatheringstatechange = () => {
-        if (_pc.iceGatheringState === 'complete') resolve();
-      };
-      setTimeout(resolve, 5000); // 5 s max wait
-    });
-
-    const res = await fetch(API_BASE_URL + '/api/webrtc/offer', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sdp:  _pc.localDescription.sdp,
-        type: _pc.localDescription.type,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Server returned ${res.status}`);
-    }
-
-    const answer = await res.json();
-    await _pc.setRemoteDescription(new RTCSessionDescription(answer));
-
-    btn.disabled   = false;
-    btn.textContent = 'Reconnect';
-    btn.style.display = 'inline-flex';
-    discBtn.style.display = 'inline-flex';
-    showToast('✓ WebRTC stream connected', 'green');
-
-  } catch (err) {
-    console.error('WebRTC connect error:', err);
-    showToast('✕ WebRTC failed: ' + err.message, 'red');
-    errorB.style.display = 'inline-flex';
-    btn.disabled   = false;
-    btn.textContent = 'Retry';
-    if (_pc) { _pc.close(); _pc = null; }
-  }
+  // Attach the HTTP stream URL
+  video.src = API_BASE_URL + '/video_feed';
+  
+  showToast('✓ Drone stream connected via HTTP', 'green');
+  startLiveDetection();
 }
 
 function disconnectWebRTC() {
-  if (_pc) { _pc.close(); _pc = null; }
-  stopLiveDetection();
   const video = document.getElementById('drone-video');
-  video.srcObject = null;
+  video.src = ''; // Stop the stream
+  
+  stopLiveDetection();
   document.getElementById('drone-placeholder').style.display = 'flex';
   document.getElementById('webrtc-status-badge').style.display = 'none';
   document.getElementById('webrtc-disconnect-btn').style.display = 'none';
-  document.getElementById('webrtc-connect-btn').textContent = 'Connect';
+  document.getElementById('webrtc-connect-btn').style.display = 'inline-flex';
   document.getElementById('live-disease-panel').style.display = 'none';
   showToast('Drone stream disconnected', 'amber');
 }
@@ -778,19 +705,19 @@ function startQualityMonitor() {
 //  posts it to /api/predict, then updates the live disease panel
 // ─────────────────────────────────────────────────────────────────
 function startLiveDetection() {
-  stopLiveDetection(); // clear any existing timer
+  stopLiveDetection(); 
   document.getElementById('live-disease-panel').style.display = 'block';
   updateLiveDetectStatus('active', 'Running inference…');
 
   _liveDetectTimer = setInterval(async () => {
-    const video = document.getElementById('drone-video');
-    if (!video.videoWidth || video.paused || video.ended) return;
+    const imgEl = document.getElementById('drone-video');
+    if (!imgEl.complete || !imgEl.naturalWidth) return;
 
-    // Capture current frame to canvas → Blob
+    // Capture current frame from the <img> tag
     const canvas = document.createElement('canvas');
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.width  = imgEl.naturalWidth;
+    canvas.height = imgEl.naturalHeight;
+    canvas.getContext('2d').drawImage(imgEl, 0, 0);
 
     canvas.toBlob(async (blob) => {
       if (!blob) return;
@@ -805,7 +732,7 @@ function startLiveDetection() {
       } catch (_) { /* silently skip dropped frames */ }
     }, 'image/jpeg', 0.85);
 
-  }, 5000); // 5-second cadence — balances cost vs. freshness
+  }, 5000); // Analyzes a frame every 5 seconds
 }
 
 function stopLiveDetection() {
