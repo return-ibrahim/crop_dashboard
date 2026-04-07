@@ -1,9 +1,13 @@
+# Add these two packages to your requirements.txt (or render.yaml) before redeploying:
+aiortc>=1.9.0
+av>=12.0.0
+
+# Full requirements.txt should look like:
 flask
 flask-cors
-gunicorn
-ultralytics
 opencv-python-headless
 numpy
-torch
-torchvision
 google-genai
+ultralytics
+aiortc>=1.9.0
+av>=12.0.0

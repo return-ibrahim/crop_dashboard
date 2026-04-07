@@ -267,18 +267,89 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
         </div>
         <div id="img-status" style="font-size:11px;color:var(--text3);margin-top:8px;display:none;"></div>
          
-        <div class="card span2">
-  <div class="card-title">📡 Live Drone Intelligence Feed</div>
-  <div style="position:relative; width:100%; border-radius:10px; overflow:hidden; background:#000;">
-    <img id="drone-feed" src="" style="width:100%; height:auto; display:block;" alt="Connecting to Drone...">
-    
-    <div style="position:absolute; top:12px; left:12px; display:flex; gap:8px;">
-      <span class="badge bg">Live Stream</span>
-      <span class="badge bb" id="stream-fps">YOLOv8 Active</span>
+        <div class="card span2" id="drone-card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <div class="card-title" style="margin-bottom:0;">📡 Live Drone Intelligence Feed</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span class="badge bg" id="webrtc-status-badge" style="display:none;">● WebRTC</span>
+      <span class="badge br" id="webrtc-error-badge" style="display:none;">No Signal</span>
+      <button class="btn-secondary" id="webrtc-connect-btn" onclick="connectWebRTC()" style="padding:5px 12px;font-size:11px;">Connect</button>
+      <button class="btn-secondary" id="webrtc-disconnect-btn" onclick="disconnectWebRTC()" style="padding:5px 12px;font-size:11px;display:none;">Disconnect</button>
     </div>
   </div>
-  <p style="font-size:12px; color:var(--text2); margin-top:10px;">
-    Real-time inference active. Use 'Save Report' below to archive detected anomalies.
+
+  <!-- Video element — WebRTC stream renders here -->
+  <div style="position:relative;width:100%;border-radius:10px;overflow:hidden;background:#000;min-height:220px;">
+    <video id="drone-video" autoplay playsinline muted
+      style="width:100%;height:auto;display:block;min-height:220px;object-fit:cover;"></video>
+
+    <!-- Overlay badges -->
+    <div style="position:absolute;top:10px;left:10px;display:flex;gap:6px;" id="video-overlay-badges">
+      <span class="badge bb" id="webrtc-quality-badge" style="display:none;font-size:10px;"></span>
+    </div>
+
+    <!-- Connecting placeholder -->
+    <div id="drone-placeholder" style="
+      position:absolute;inset:0;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:10px;
+      background:linear-gradient(135deg,#0d1117 60%,#161b22);
+      color:var(--text3);font-size:13px;font-family:var(--mono);">
+      <div style="font-size:32px;">🛸</div>
+      <div>Click <strong style="color:var(--text2)">Connect</strong> to start WebRTC stream</div>
+      <div style="font-size:11px;">Make sure drone_bridge.py is running on your laptop</div>
+    </div>
+  </div>
+
+  <!-- ── Live Disease Ticker ── -->
+  <div id="live-disease-panel" style="
+    margin-top:14px;border-radius:10px;
+    background:var(--bg3);border:1px solid var(--border);
+    padding:14px 16px;display:none;">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.8px;">
+        🔴 Live Detection
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span id="live-detect-status" style="font-size:11px;color:var(--text3);font-family:var(--mono);">
+          Waiting for stream…
+        </span>
+        <div class="model-dot" id="live-detect-dot" style="background:var(--text3);animation:none;"></div>
+      </div>
+    </div>
+
+    <!-- Current detection result -->
+    <div style="display:flex;gap:16px;align-items:flex-start;">
+      <div style="flex:1;">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px;font-family:var(--mono);">DETECTED</div>
+        <div id="live-disease-name" style="font-family:var(--serif);font-size:20px;color:var(--green);">—</div>
+        <div id="live-disease-sub" style="font-size:11px;color:var(--text2);margin-top:3px;"></div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px;font-family:var(--mono);">CONFIDENCE</div>
+        <div id="live-conf-val" style="font-family:var(--mono);font-size:18px;color:var(--blue);">—</div>
+      </div>
+    </div>
+
+    <!-- Confidence bar -->
+    <div class="conf-wrap" style="margin-top:10px;">
+      <div class="conf-bar"><div class="conf-fill" id="live-conf-fill" style="width:0%;background:var(--green);"></div></div>
+    </div>
+
+    <!-- Treatment flash (shown only for diseases) -->
+    <div id="live-treatment-flash" style="display:none;margin-top:10px;padding:9px 13px;
+      background:var(--bg2);border-radius:8px;border-left:2px solid var(--amber);font-size:12px;color:var(--text2);line-height:1.5;">
+    </div>
+
+    <!-- History of last 5 detections -->
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+      <div style="font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Recent Detections</div>
+      <div id="live-history-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+    </div>
+  </div>
+
+  <p style="font-size:12px;color:var(--text2);margin-top:10px;">
+    WebRTC low-latency stream · YOLO inference runs every 5 s · auto-saved to Scan History
   </p>
 </div>
         <!-- PlantVillage-style classifier result -->
@@ -563,16 +634,292 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:1
 <script src="config.js"></script>
 
 <script>
-// ── Set drone video feed URL from config (fixes Vercel deployment) ─────────
-document.addEventListener('DOMContentLoaded', () => {
-  const feed = document.getElementById('drone-feed');
-  if (feed && typeof API_BASE_URL !== 'undefined') {
-    feed.src = API_BASE_URL + '/video_feed';
-    feed.onerror = () => {
-      feed.alt = 'Drone feed unavailable — backend offline or no camera connected';
+// ─────────────────────────────────────────────────────────────────
+//  WebRTC — connects to the aiortc backend and streams drone video
+// ─────────────────────────────────────────────────────────────────
+let _pc = null;                   // RTCPeerConnection
+let _liveDetectTimer = null;      // setInterval handle
+let _liveHistory = [];            // last 5 detections
+let _statsTimer  = null;          // requestAnimationFrame handle for quality badge
+
+async function connectWebRTC() {
+  if (_pc) disconnectWebRTC();
+
+  const btn      = document.getElementById('webrtc-connect-btn');
+  const discBtn  = document.getElementById('webrtc-disconnect-btn');
+  const statusB  = document.getElementById('webrtc-status-badge');
+  const errorB   = document.getElementById('webrtc-error-badge');
+  const placeholder = document.getElementById('drone-placeholder');
+
+  btn.disabled = true;
+  btn.textContent = 'Connecting…';
+  errorB.style.display = 'none';
+
+  try {
+    _pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    });
+
+    // ── When the remote video track arrives, attach it to <video> ──
+    _pc.ontrack = (event) => {
+      const video = document.getElementById('drone-video');
+      video.srcObject = event.streams[0];
+      placeholder.style.display = 'none';
+      statusB.style.display = 'inline-flex';
+      startLiveDetection();
+      startQualityMonitor();
     };
+
+    _pc.onconnectionstatechange = () => {
+      const state = _pc.connectionState;
+      console.log('WebRTC state:', state);
+      if (state === 'failed' || state === 'disconnected') {
+        showToast('⚠ Drone stream disconnected', 'amber');
+        stopLiveDetection();
+        statusB.style.display = 'none';
+        errorB.style.display  = 'inline-flex';
+        placeholder.style.display = 'flex';
+      }
+    };
+
+    // ── Create recvonly offer ──
+    _pc.addTransceiver('video', { direction: 'recvonly' });
+    const offer = await _pc.createOffer();
+    await _pc.setLocalDescription(offer);
+
+    // Wait for ICE gathering to complete (avoids trickle-ICE complexity)
+    await new Promise((resolve) => {
+      if (_pc.iceGatheringState === 'complete') { resolve(); return; }
+      _pc.onicegatheringstatechange = () => {
+        if (_pc.iceGatheringState === 'complete') resolve();
+      };
+      setTimeout(resolve, 5000); // 5 s max wait
+    });
+
+    const res = await fetch(API_BASE_URL + '/api/webrtc/offer', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sdp:  _pc.localDescription.sdp,
+        type: _pc.localDescription.type,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server returned ${res.status}`);
+    }
+
+    const answer = await res.json();
+    await _pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+    btn.disabled   = false;
+    btn.textContent = 'Reconnect';
+    btn.style.display = 'inline-flex';
+    discBtn.style.display = 'inline-flex';
+    showToast('✓ WebRTC stream connected', 'green');
+
+  } catch (err) {
+    console.error('WebRTC connect error:', err);
+    showToast('✕ WebRTC failed: ' + err.message, 'red');
+    errorB.style.display = 'inline-flex';
+    btn.disabled   = false;
+    btn.textContent = 'Retry';
+    if (_pc) { _pc.close(); _pc = null; }
   }
-});
+}
+
+function disconnectWebRTC() {
+  if (_pc) { _pc.close(); _pc = null; }
+  stopLiveDetection();
+  const video = document.getElementById('drone-video');
+  video.srcObject = null;
+  document.getElementById('drone-placeholder').style.display = 'flex';
+  document.getElementById('webrtc-status-badge').style.display = 'none';
+  document.getElementById('webrtc-disconnect-btn').style.display = 'none';
+  document.getElementById('webrtc-connect-btn').textContent = 'Connect';
+  document.getElementById('live-disease-panel').style.display = 'none';
+  showToast('Drone stream disconnected', 'amber');
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  WebRTC quality badge — reads RTCStatsReport every 2 s
+// ─────────────────────────────────────────────────────────────────
+function startQualityMonitor() {
+  const badge = document.getElementById('webrtc-quality-badge');
+  badge.style.display = 'inline-flex';
+  let lastBytes = 0, lastTs = Date.now();
+
+  _statsTimer = setInterval(async () => {
+    if (!_pc) return;
+    try {
+      const stats = await _pc.getStats();
+      stats.forEach(report => {
+        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+          const now   = Date.now();
+          const dt    = (now - lastTs) / 1000;
+          const bytes = report.bytesReceived || 0;
+          const kbps  = dt > 0 ? Math.round((bytes - lastBytes) * 8 / 1000 / dt) : 0;
+          lastBytes   = bytes;
+          lastTs      = now;
+          const fps   = Math.round(report.framesPerSecond || 0);
+          badge.textContent = `${fps} fps · ${kbps} kbps`;
+        }
+      });
+    } catch (_) {}
+  }, 2000);
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Continuous disease detection — grabs a frame every 5 s and
+//  posts it to /api/predict, then updates the live disease panel
+// ─────────────────────────────────────────────────────────────────
+function startLiveDetection() {
+  stopLiveDetection(); // clear any existing timer
+  document.getElementById('live-disease-panel').style.display = 'block';
+  updateLiveDetectStatus('active', 'Running inference…');
+
+  _liveDetectTimer = setInterval(async () => {
+    const video = document.getElementById('drone-video');
+    if (!video.videoWidth || video.paused || video.ended) return;
+
+    // Capture current frame to canvas → Blob
+    const canvas = document.createElement('canvas');
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) return;
+      const formData = new FormData();
+      formData.append('image', blob, 'drone_frame.jpg');
+
+      try {
+        const res  = await fetch(API_BASE_URL + '/api/predict', { method: 'POST', body: formData });
+        if (!res.ok) return;
+        const data = await res.json();
+        renderLiveDetection(data);
+      } catch (_) { /* silently skip dropped frames */ }
+    }, 'image/jpeg', 0.85);
+
+  }, 5000); // 5-second cadence — balances cost vs. freshness
+}
+
+function stopLiveDetection() {
+  if (_liveDetectTimer) { clearInterval(_liveDetectTimer); _liveDetectTimer = null; }
+  if (_statsTimer)      { clearInterval(_statsTimer);      _statsTimer = null; }
+  updateLiveDetectStatus('idle', 'Stream stopped');
+}
+
+function updateLiveDetectStatus(state, text) {
+  const dot = document.getElementById('live-detect-dot');
+  const lbl = document.getElementById('live-detect-status');
+  if (!dot || !lbl) return;
+  lbl.textContent = text;
+  if (state === 'active') {
+    dot.style.background  = 'var(--green)';
+    dot.style.animation   = 'pulse 2s ease-in-out infinite';
+  } else {
+    dot.style.background  = 'var(--text3)';
+    dot.style.animation   = 'none';
+  }
+}
+
+function renderLiveDetection(data) {
+  const isHealthy  = data.disease === 'Healthy';
+  const color      = isHealthy ? 'var(--green)' : 'var(--red)';
+  const conf       = Math.round(data.confidence || 0);
+
+  // Disease name + confidence
+  document.getElementById('live-disease-name').textContent  = data.disease || '—';
+  document.getElementById('live-disease-name').style.color  = color;
+  document.getElementById('live-disease-sub').textContent   = isHealthy
+    ? 'No disease detected in this frame'
+    : `🧪 ${data.pesticide || ''} · ${data.rate || ''}`;
+  document.getElementById('live-conf-val').textContent = conf + '%';
+  document.getElementById('live-conf-val').style.color = conf > 75 ? 'var(--green)' : conf > 50 ? 'var(--amber)' : 'var(--red)';
+
+  // Confidence fill bar
+  const fill = document.getElementById('live-conf-fill');
+  fill.style.background = color;
+  setTimeout(() => { fill.style.width = conf + '%'; }, 30);
+
+  // Treatment flash — shown only for diseases
+  const flashDiv = document.getElementById('live-treatment-flash');
+  if (!isHealthy && data.instructions) {
+    flashDiv.style.display  = 'block';
+    flashDiv.innerHTML      = `⚠️ <strong>${data.disease}</strong> — ${data.instructions}`;
+  } else {
+    flashDiv.style.display  = 'none';
+  }
+
+  // Update status label
+  updateLiveDetectStatus('active', 'Updated ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+  // Push to recent detections list (keep last 5)
+  _liveHistory.unshift({ disease: data.disease, conf, time: new Date(), healthy: isHealthy });
+  if (_liveHistory.length > 5) _liveHistory.pop();
+
+  const listEl = document.getElementById('live-history-list');
+  listEl.innerHTML = _liveHistory.map(h => `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      padding:5px 8px;border-radius:6px;background:var(--bg2);font-size:12px;">
+      <span style="color:${h.healthy ? 'var(--green)' : 'var(--red)'}">
+        ${h.healthy ? '✓' : '⚠'} ${h.disease}
+      </span>
+      <span style="font-family:var(--mono);color:var(--text3);font-size:11px;">
+        ${h.conf}% · ${h.time.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+      </span>
+    </div>`).join('');
+
+  // Auto-save non-healthy detections to scan history with a brief toast
+  if (!isHealthy) {
+    autoSaveLiveDetection(data).catch(() => {});
+  }
+}
+
+async function autoSaveLiveDetection(data) {
+  const scans = await loadScans();
+  // Deduplicate: skip if the same disease was saved in the last 2 minutes
+  const recent = scans.find(s =>
+    s.disease === data.disease &&
+    s.source  === 'live-drone' &&
+    Date.now() - new Date(s.date).getTime() < 2 * 60 * 1000
+  );
+  if (recent) return;
+
+  const newScan = {
+    id:         Date.now(),
+    date:       new Date().toISOString(),
+    crop:       document.getElementById('crop-type')?.value || 'rice',
+    stage:      document.getElementById('growth-stage')?.value || '—',
+    field:      'Live Drone Feed',
+    source:     'live-drone',
+    disease:    data.disease,
+    scientific: '',
+    severity:   data.confidence > 75 ? 'High' : 'Moderate',
+    sevColor:   data.confidence > 75 ? 'red'  : 'amber',
+    confidence: Math.round(data.confidence),
+    description: `Detected live via drone. Pesticide: ${data.pesticide}`,
+    treatments: [
+      `🧪 ${data.pesticide}`,
+      `💧 Rate: ${data.rate}`,
+      `📋 ${data.instructions}`
+    ],
+    alternatives: [],
+    conditions:  {},
+    symptoms:    'Auto-detected via drone feed',
+    hasImage:    false,
+    status:      'Diagnosed',
+  };
+  scans.unshift(newScan);
+  await saveScans(scans);
+  await updateLiveStats();
+  showToast(`⚠ ${data.disease} auto-saved to Scan History`, 'amber');
+}
 </script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
