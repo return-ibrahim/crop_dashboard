@@ -14,7 +14,7 @@ if (window.location.hostname === "localhost" || window.location.hostname === "12
     
     // Live Cloud Backend
     // IMPORTANT: Replace this URL with your actual Render/Railway backend URL once deployed!
-    API_BASE_URL = "https://crop-dashboard-r0qf.onrender.com"; 
+    API_BASE_URL = "https://crop-dashboard-w9tt.onrender.com"; 
     console.log("🌍 Running in Production Mode. API:", API_BASE_URL);
 
 }
